@@ -1,8 +1,11 @@
 import os
 import argparse
+import sys
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from prompts import system_prompt
+from call_function import available_functions, call_function
 
 load_dotenv()
 api_key = os.environ.get("GEMINI_API_KEY")
@@ -18,17 +21,40 @@ messages = [types.Content(role="user", parts=[types.Part(text=args.user_prompt)]
 
 def main():
     
-    response = client.models.generate_content(model="gemini-2.5-flash", contents=messages)
-    if not response.usage_metadata:
-        raise RuntimeError("Gemini API response appears to be malformed")
-    if args.verbose:
-        print(f"User prompt: {args.user_prompt}")
-        print("Prompt tokens:", response.usage_metadata.prompt_token_count)
-        print("Response tokens:", response.usage_metadata.candidates_token_count)
-        
-    print("Response:")
-    print(response.text)
-
+    for _ in range(20):
+        response = client.models.generate_content(model="gemini-2.5-flash", contents=messages, config=types.GenerateContentConfig(tools=[available_functions], system_instruction=system_prompt, temperature=0))
+        if response.candidates != None:
+            for candidate in response.candidates:
+                messages.append(candidate.content)
+        if not response.usage_metadata:
+            raise RuntimeError("Gemini API response appears to be malformed")
+        if args.verbose:
+            print(f"User prompt: {args.user_prompt}")
+            print("Prompt tokens:", response.usage_metadata.prompt_token_count)
+            print("Response tokens:", response.usage_metadata.candidates_token_count)
+        if response.function_calls != None:
+            function_results_list = []
+            for function_call in response.function_calls:
+                function_call_result = call_function(function_call, args.verbose)
+                if len(function_call_result.parts) == 0:
+                    raise Exception("Error: empty .parts list")
+                if function_call_result.parts[0].function_response == None:
+                    raise Exception("Error: .function_response is not a FunctionResponse object")
+                if function_call_result.parts[0].function_response.response == None:
+                    raise Exception("Error: .function_response.response is invalid")
+                else:
+                    function_results_list.append(function_call_result.parts[0])
+                    if args.verbose == True:
+                        print(f"-> {function_call_result.parts[0].function_response.response}")
+            messages.append(types.Content(role="user", parts=function_results_list))
+                            
+                   
+        else:    
+            print("Response:")
+            print(response.text)
+            return
+    print("Error: Maximum number of iteretion exceeded without an answer")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
